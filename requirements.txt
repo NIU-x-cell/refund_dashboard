@@ -1,0 +1,7 @@
+streamlit
+pandas
+pymysql
+openpyxl
+plotly
+numpy
+bcrypt # 密码加密，生产用
