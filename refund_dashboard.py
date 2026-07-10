@@ -104,26 +104,27 @@ def dashboard_main():
             max_value=max_db_date.date()
         )
 
-    # ========= 修复：JOIN两张表匹配部门，解决店铺名称不一致查不到数据 =========
+    # 修复：表名shop_dept，修正拼写错误，JOIN关联两张表解决店铺名称不匹配
     status_holders = ",".join(["%s"] * len(select_status))
+    dept_holders = ",".join(["%s"] * len(select_dept))
     filter_sql = f"""
     SELECT DISTINCT t.* FROM ozon_ref t
-    INNER JOIN shop_de s ON TRIM(t.店铺) = TRIM(s.店铺)
-    WHERE s.dept_code IN ({','.join(['%s']*len(select_dept))})
+    INNER JOIN shop_dept s ON TRIM(t.店铺) = TRIM(s.店铺)
+    WHERE s.dept_code IN ({dept_holders})
       AND t.`创建退款时订单状态` IN ({status_holders})
       AND DATE(t.`退款时间`) BETWEEN %s AND %s
     """
     params_main = select_dept + select_status + [start_date, end_date]
     df_data = query_sql(filter_sql, params=params_main)
 
-    # 上期同期查询同步改成JOIN写法
+    # 上期同期查询同步修正表名
     days_range = (end_date - start_date).days
     last_start = start_date - timedelta(days=days_range + 1)
     last_end = start_date - timedelta(days=1)
     last_sql = f"""
     SELECT DISTINCT t.* FROM ozon_ref t
     INNER JOIN shop_dept s ON TRIM(t.店铺) = TRIM(s.店铺)
-    WHERE s.dept_code IN ({','.join(['%s']*len(select_dept))})
+    WHERE s.dept_code IN ({dept_holders})
       AND t.`创建退款时订单状态` IN ({status_holders})
       AND DATE(t.`退款时间`) BETWEEN %s AND %s
     """
@@ -162,7 +163,7 @@ def dashboard_main():
         shop_count = df_data["店铺"].nunique()
         st.metric("涉及店铺数量", value=shop_count)
 
-    # ========= 修复趋势图：增加日期转换兜底，防止dt报错页面崩溃 =========
+    # 趋势图增加日期容错兜底，防止dt报错崩溃
     st.divider()
     trend_title = "全部门每日退货件数趋势" if is_admin else f"{self_dept} 部门每日退货件数趋势"
     st.subheader(trend_title)
