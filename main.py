@@ -3,14 +3,14 @@ from streamlit import Page
 import pandas as pd
 from config import get_db_conn
 
-# 初始化会话存储登录信息
+# 初始化会话存储登录信息【修复字典key无引号语法错误】
 if "user_auth" not in st.session_state:
     st.session_state.user_auth = {
-        is_login: False,
-        username: "",
-        role: "",
-        dept_code: "",
-        allow_shop_list: []
+        "is_login": False,
+        "username": "",
+        "role": "",
+        "dept_code": "",
+        "allow_shop_list": []
     }
 
 # 登录页面
@@ -20,8 +20,9 @@ def login_page():
     pwd = st.text_input("登录密码", type="password")
     if st.button("登录验证"):
         conn = get_db_conn()
-        user_sql = f"SELECT * FROM sys_user WHERE username = '{username}'"
-        user_df = pd.read_sql(user_sql, conn)
+        user_sql = "SELECT * FROM sys_user WHERE username = %s"
+        user_df = pd.read_sql(user_sql, conn, params=[username])
+        conn.close()
         if len(user_df) == 0:
             st.error("账号不存在！")
             return
@@ -31,8 +32,10 @@ def login_page():
             return
         # 管理员无店铺限制，部门账号读取绑定店铺
         if user_row["role"] != "admin":
-            shop_sql = f"SELECT `店铺` FROM shop_dept WHERE dept_code = '{user_row['dept_code']}'"
-            shop_df = pd.read_sql(shop_sql, conn)
+            conn2 = get_db_conn()
+            shop_sql = "SELECT `店铺` FROM shop_dept WHERE dept_code = %s"
+            shop_df = pd.read_sql(shop_sql, conn2, params=[user_row['dept_code']])
+            conn2.close()
             shop_list = shop_df["店铺"].tolist()
         else:
             shop_list = []
