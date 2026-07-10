@@ -225,11 +225,13 @@ def dashboard_main():
     show_cols = ["店铺", "该店铺工单数量", "退款总金额RMB", "退货总件数", "该店铺工单占此商品总工单比例"]
     st.dataframe(sku_shop_table[show_cols], width="stretch")
 
-    # 退款明细（原版保留，width替换）
-    st.divider()
-    st.subheader("退款订单明细")
-    st.dataframe(df_data, width="stretch", height=400)
 
+    
+    
+     st.divider()
+    # 原始明细表格（保持你最初版本，不分页，原样）
+    st.subheader("退款订单明细")
+    st.dataframe(df_data, use_container_width=True, height=400)
     # 【内存导出Excel，仅导出前三张汇总表，不导出原始退款明细】
     def export_excel():
         buf = BytesIO()
