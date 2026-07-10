@@ -230,21 +230,27 @@ def dashboard_main():
     st.subheader("退款订单明细")
     st.dataframe(df_data, width="stretch", height=400)
 
-    # 【核心修复】内存导出，不再写本地文件，多选多部门不会卡死进程
+    # 【内存导出Excel，仅导出前三张汇总表，不导出原始退款明细】
     def export_excel():
         buf = BytesIO()
         with pd.ExcelWriter(buf, engine="openpyxl") as output:
-            df_data.to_excel(output, sheet_name="明细数据", index=False)
-            shop_summary.to_excel(output, sheet_name="店铺汇总", index=False)
-            sku_summary_full.to_excel(output, sheet_name="商品退货排行", index=False)
+            # 1.店铺汇总
+            if not shop_summary.empty:
+                shop_summary.to_excel(output, sheet_name="店铺汇总", index=False)
+            # 2.商品退货排行总表
+            if not sku_summary_full.empty:
+                sku_summary_full.to_excel(output, sheet_name="商品退货排行", index=False)
+            # 3.当前选中单品分店铺明细
+            if not sku_shop_table.empty:
+                sku_shop_table.to_excel(output, sheet_name="单品店铺明细", index=False)
         buf.seek(0)
         return buf.getvalue()
 
     excel_bytes = export_excel()
     st.download_button(
-        label="导出全部筛选数据Excel",
+        label="导出汇总数据Excel（不含原始退款明细）",
         data=excel_bytes,
-        file_name="Ozon退款数据导出.xlsx",
+        file_name="Ozon退款汇总数据.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
 
