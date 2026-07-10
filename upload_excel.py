@@ -17,10 +17,16 @@ def import_refund_data(batch_size=1000):
     # 所有空值NaN替换为 None，数据库存NULL
     df = df.where(pd.notna(df), None)
 
-    # 拼接插入SQL
+    # 标准化退款时间，解决看板dt报错
+    if "退款时间" in df.columns:
+        df["退款时间"] = pd.to_datetime(df["退款时间"], errors="coerce")
+        df["退款时间"] = df["退款时间"].dt.strftime("%Y-%m-%d %H:%M:%S")
+        df["退款时间"] = df["退款时间"].replace("NaT", None)
+
+    # 拼接插入SQL，增加IGNORE自动跳过重复订单
     col_sql = ",".join([f"`{c}`" for c in all_cols])
     place_sql = ",".join(["%s"] * len(all_cols))
-    insert_sql = f"INSERT INTO ozon_ref ({col_sql}) VALUES ({place_sql})"
+    insert_sql = f"INSERT IGNORE INTO ozon_ref ({col_sql}) VALUES ({place_sql})"
 
     # 建立数据库连接
     conn = get_db_conn()
@@ -39,7 +45,7 @@ def import_refund_data(batch_size=1000):
             conn.commit()
             success_count += len(batch_data)
             print(f"导入进度：{success_count}/{total} 条")
-        print(f"✅ 全部导入完成，总计{success_count}条退款数据")
+        print(f"✅ 全部导入完成，总计{success_count}条退款数据（重复订单已自动跳过）")
     except Exception as err:
         # 出错回滚，避免半批脏数据入库
         conn.rollback()
