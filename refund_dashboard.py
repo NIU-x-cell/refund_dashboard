@@ -97,7 +97,8 @@ def dashboard_main():
         st.divider()
 
         # 原有退款状态筛选完全不动
-        status_list = query_sql("SELECT DISTINCT `创建退款时订单状态` FROM ozon_ref")["创建退款时订单状态"].tolist() if not query_sql("SELECT DISTINCT `创建退款时订单状态` FROM ozon_ref").empty else []
+        status_raw_df = query_sql("SELECT DISTINCT `创建退款时订单状态` FROM ozon_ref")
+        status_list = status_raw_df["创建退款时订单状态"].tolist() if not status_raw_df.empty else []
         select_status = st.multiselect("退款状态", options=status_list, default=status_list)
 
         # ========== 日期默认改为最近半个月（15天） ==========
@@ -197,7 +198,7 @@ def dashboard_main():
             title="每日退货件数走势",
             labels={"当日退货件数": "退货总件数"}
         )
-        st.plotly_chart(fig_line, use_container_width=True)
+        st.plotly_chart(fig_line, width="stretch")
     else:
         st.info("当前筛选无数据，无法生成趋势图")
 
@@ -211,7 +212,7 @@ def dashboard_main():
             退款总件数=(qty_col, "sum")
         ).reset_index()
         shop_summary = shop_summary.sort_values(by="退款工单总数", ascending=False).reset_index(drop=True)
-        st.dataframe(shop_summary, use_container_width=True)
+        st.dataframe(shop_summary, width="stretch")
     else:
         st.info("暂无店铺数据")
 
@@ -233,7 +234,7 @@ def dashboard_main():
             title="筛选区间TOP15商品退货件数占比",
             hole=0.1
         )
-        st.plotly_chart(fig_pie, use_container_width=True)
+        st.plotly_chart(fig_pie, width="stretch")
     else:
         st.info("无商品退货数据")
 
@@ -247,7 +248,7 @@ def dashboard_main():
             退款总金额RMB=("退款金额RMB", "sum")
         ).reset_index()
         sku_summary_full = sku_summary_full.sort_values(by="退货总件数", ascending=False).reset_index(drop=True)
-        st.dataframe(sku_summary_full, use_container_width=True, height=400)
+        st.dataframe(sku_summary_full, width="stretch", height=400)
         # 修复：空表保护，防止iloc[0]崩溃进程
         if len(sku_summary_full) > 0:
             top1_sku = sku_summary_full.iloc[0]
@@ -284,7 +285,7 @@ def dashboard_main():
         sku_shop_table = sku_shop_table.sort_values(by="该店铺工单数量", ascending=False).reset_index(drop=True)
         # 固定展示列
         show_cols = ["店铺", "该店铺工单数量", "退款总金额RMB", "退货总件数", "该店铺工单占此商品总工单比例"]
-        st.dataframe(sku_shop_table[show_cols], use_container_width=True)
+        st.dataframe(sku_shop_table[show_cols], width="stretch")
     else:
         st.info("无商品数据，无法选择单品查看明细")
 
@@ -294,7 +295,7 @@ def dashboard_main():
     if df_data.empty:
         st.info("当前筛选条件下无匹配退款订单数据，请更换部门/日期/退款状态后重试")
     else:
-        st.dataframe(df_data, use_container_width=True, height=400)
+        st.dataframe(df_data, width="stretch", height=400)
 
     # ====================== 【核心修复】云平台兼容Excel导出（纯内存，不写本地文件） ======================
     def export_excel():
