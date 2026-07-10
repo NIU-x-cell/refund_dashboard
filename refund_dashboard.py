@@ -11,19 +11,19 @@ st.set_page_config(page_title="Ozon退款数据看板", layout="wide")
 st.title("Ozon店铺退款数据管理看板")
 
 
-# ---------------------- 数据库查询通用函数（缓存优化） ----------------------
+# ---------------------- 数据库查询通用函数（缓存优化，新增params兼容防SQL注入） ----------------------
 @st.cache_data(ttl=600)
 def query_sql(sql, params=None):
     conn = get_db_conn()
-    if params is None:
-        df = pd.read_sql(sql, conn)
-    else:
+    if params:
         df = pd.read_sql(sql, conn, params=params)
+    else:
+        df = pd.read_sql(sql, conn)
     conn.close()
     return df
 
 
-# ---------------------- 登录模块（新增读取is_admin超级管理员标识，修复SQL拼接崩溃） ----------------------
+# ---------------------- 登录模块（参数化SQL，防止账号带引号崩溃） ----------------------
 def login_page():
     st.subheader("账号登录")
     username = st.text_input("登录账号")
@@ -46,28 +46,17 @@ def login_page():
 # ---------------------- 获取全部部门列表 ----------------------
 def get_all_dept_list():
     dept_df = query_sql("SELECT DISTINCT dept_code FROM shop_dept")
-    return dept_df["dept_code"].tolist() if not dept_df.empty else []
+    return dept_df["dept_code"].tolist()
 
 
-# ---------------------- 根据选中部门获取对应店铺列表【修复IN拼接语法崩溃】 ----------------------
+# ---------------------- 根据选中部门获取对应店铺列表（参数化防SQL报错） ----------------------
 def get_shop_by_dept(dept_list):
-    if not dept_list:
-        return []
     holders = ",".join(["%s"] * len(dept_list))
-    sql = f"SELECT DISTINCT `店铺` FROM shop_dept WHERE dept_code IN ({holders})"
-    shop_df = query_sql(sql, params=dept_list)
-    return shop_df["店铺"].tolist() if not shop_df.empty else []
+    shop_df = query_sql(f"SELECT DISTINCT `店铺` FROM shop_dept WHERE dept_code IN ({holders})", params=dept_list)
+    return shop_df["店铺"].tolist()
 
 
-# ---------------------- 环比增长率工具函数 ----------------------
-def get_growth(curr, last):
-    if last == 0:
-        return "——"
-    rate = (curr - last) / last * 100
-    return f"{rate:.2f}%"
-
-
-# ---------------------- 数据筛选与看板主体 ----------------------
+# ---------------------- 数据筛选与看板主体（完全保留原版线性逻辑，无多余分支） ----------------------
 def dashboard_main():
     user = st.session_state["user"]
     all_depts = get_all_dept_list()
@@ -86,30 +75,25 @@ def dashboard_main():
             st.rerun()
         st.divider()
 
-        # ========== 改动点：替换为部门选择，删除原店铺多选 ==========
+        # 部门选择逻辑不变
         if is_admin:
-            # 超级管理员：可多选所有部门
             select_dept = st.multiselect("选择部门", options=all_depts, default=all_depts)
         else:
-            # 普通部门账号：仅展示自身部门，固定不可修改
             st.text_input("当前所属部门", value=self_dept, disabled=True)
             select_dept = [self_dept]
         st.divider()
 
-        # 原有退款状态筛选完全不动
-        status_raw_df = query_sql("SELECT DISTINCT `创建退款时订单状态` FROM ozon_ref")
-        status_list = status_raw_df["创建退款时订单状态"].tolist() if not status_raw_df.empty else []
+        # 退款状态筛选完全不动
+        status_list = query_sql("SELECT DISTINCT `创建退款时订单状态` FROM ozon_ref")["创建退款时订单状态"].tolist()
         select_status = st.multiselect("退款状态", options=status_list, default=status_list)
 
-        # ========== 日期默认改为最近半个月（15天） ==========
+        # 日期逻辑原版保留
         date_min_df = query_sql("SELECT MIN(`退款时间`) AS min_date, MAX(`退款时间`) AS max_date FROM ozon_ref")
         min_db_date = date_min_df.iloc[0]["min_date"]
         max_db_date = date_min_df.iloc[0]["max_date"]
 
-        # 计算默认起始：最大日期往前推15天
         default_end = max_db_date
         default_start = default_end - timedelta(days=15)
-        # 兜底：如果往前15天早于数据库最早日期，就用数据库最小日期
         if default_start < min_db_date:
             default_start = min_db_date
 
@@ -120,55 +104,51 @@ def dashboard_main():
             max_value=max_db_date.date()
         )
 
-    # 根据选中部门拿到对应所有店铺
+    # 参数化查询，替换原版f-string拼接，防止店铺名称带单引号崩溃
     shop_all = get_shop_by_dept(select_dept)
-    df_data = pd.DataFrame()
-    df_last = pd.DataFrame()
-    shop_summary = pd.DataFrame()
-    sku_summary = pd.DataFrame()
-    sku_summary_full = pd.DataFrame()
+    shop_holders = ",".join(["%s"] * len(shop_all))
+    status_holders = ",".join(["%s"] * len(select_status))
+    filter_sql = f"""
+    SELECT * FROM ozon_ref
+    WHERE `店铺` IN ({shop_holders})
+      AND `创建退款时订单状态` IN ({status_holders})
+      AND DATE(`退款时间`) BETWEEN %s AND %s
+    """
+    df_data = query_sql(filter_sql, params=shop_all + select_status + [start_date, end_date])
 
-    if len(shop_all) > 0 and len(select_status) > 0:
-        shop_holders = ",".join(["%s"] * len(shop_all))
-        status_holders = ",".join(["%s"] * len(select_status))
-        filter_sql = f"""
-        SELECT * FROM ozon_ref
-        WHERE `店铺` IN ({shop_holders})
-          AND `创建退款时订单状态` IN ({status_holders})
-          AND DATE(`退款时间`) BETWEEN %s AND %s
-        """
-        df_data = query_sql(filter_sql, params=shop_all + select_status + [start_date, end_date])
+    # 上期同期查询同样参数化
+    days_range = (end_date - start_date).days
+    last_start = start_date - timedelta(days=days_range + 1)
+    last_end = start_date - timedelta(days=1)
+    last_sql = f"""
+    SELECT * FROM ozon_ref
+    WHERE `店铺` IN ({shop_holders})
+      AND `创建退款时订单状态` IN ({status_holders})
+      AND DATE(`退款时间`) BETWEEN %s AND %s
+    """
+    df_last = query_sql(last_sql, params=shop_all + select_status + [last_start, last_end])
 
-        # ========== 计算上期同期（同天数上一个区间）数据用于环比 ==========
-        days_range = (end_date - start_date).days
-        last_start = start_date - timedelta(days=days_range + 1)
-        last_end = start_date - timedelta(days=1)
-        last_sql = f"""
-        SELECT * FROM ozon_ref
-        WHERE `店铺` IN ({shop_holders})
-          AND `创建退款时订单状态` IN ({status_holders})
-          AND DATE(`退款时间`) BETWEEN %s AND %s
-        """
-        df_last = query_sql(last_sql, params=shop_all + select_status + [last_start, last_end])
-
-    # 固定列名
-    qty_col = "退款数量(仅支持2021年12月22日之后创建的退款单)"
-
-    # 本期指标（全判空防护）
+    # 指标计算原版不动
     curr_order = len(df_data)
-    curr_rmb = df_data["退款金额RMB"].sum() if not df_data.empty else 0
-    curr_qty = df_data[qty_col].sum() if not df_data.empty else 0
-    # 上期同期指标
+    curr_rmb = df_data["退款金额RMB"].sum()
+    curr_qty = df_data["退款数量(仅支持2021年12月22日之后创建的退款单)"].sum()
+
     last_order = len(df_last)
     last_rmb = df_last["退款金额RMB"].sum() if len(df_last) > 0 else 0
-    last_qty = df_last[qty_col].sum() if len(df_last) > 0 else 0
+    last_qty = df_last["退款数量(仅支持2021年12月22日之后创建的退款单)"].sum() if len(df_last) > 0 else 0
 
-    # 环比计算
+    # 环比函数
+    def get_growth(curr, last):
+        if last == 0:
+            return "——"
+        rate = (curr - last) / last * 100
+        return f"{rate:.2f}%"
+
     order_grow = get_growth(curr_order, last_order)
     rmb_grow = get_growth(curr_rmb, last_rmb)
     qty_grow = get_growth(curr_qty, last_qty)
 
-    # 核心指标卡片
+    # 指标卡片
     col1, col2, col3, col4 = st.columns(4)
     with col1:
         st.metric("退款工单总数", value=curr_order, delta=order_grow, delta_color="inverse")
@@ -177,136 +157,86 @@ def dashboard_main():
     with col3:
         st.metric("总退款商品件数", value=int(curr_qty), delta=qty_grow, delta_color="inverse")
     with col4:
-        shop_count = df_data["店铺"].nunique() if not df_data.empty else 0
+        shop_count = df_data["店铺"].nunique()
         st.metric("涉及店铺数量", value=shop_count)
 
-    # ========== 图表2：每日退货趋势折线图 ==========
+    # 每日趋势图，use_container_width → width="stretch"
     st.divider()
-    if is_admin:
-        trend_title = "全部门每日退货件数趋势"
-    else:
-        trend_title = f"{self_dept} 部门每日退货件数趋势"
+    trend_title = "全部门每日退货件数趋势" if is_admin else f"{self_dept} 部门每日退货件数趋势"
     st.subheader(trend_title)
-    if not df_data.empty:
-        day_trend = df_data.groupby(df_data["退款时间"].dt.date)[qty_col].sum().reset_index()
-        day_trend.columns = ["日期", "当日退货件数"]
-        fig_line = px.line(
-            day_trend,
-            x="日期",
-            y="当日退货件数",
-            markers=True,
-            title="每日退货件数走势",
-            labels={"当日退货件数": "退货总件数"}
-        )
-        st.plotly_chart(fig_line, width="stretch")
-    else:
-        st.info("当前筛选无数据，无法生成趋势图")
+    day_trend = df_data.groupby(df_data["退款时间"].dt.date)[
+        "退款数量(仅支持2021年12月22日之后创建的退款单)"].sum().reset_index()
+    day_trend.columns = ["日期", "当日退货件数"]
+    fig_line = px.line(day_trend, x="日期", y="当日退货件数", markers=True, title="每日退货件数走势", labels={"当日退货件数": "退货总件数"})
+    st.plotly_chart(fig_line, width="stretch")
 
     st.divider()
-    # 店铺维度汇总
+    # 店铺汇总表格
     st.subheader("各店铺退款汇总")
-    if not df_data.empty:
-        shop_summary = df_data.groupby("店铺").agg(
-            退款工单总数=("订单号", "count"),
-            退款总金额RMB=("退款金额RMB", "sum"),
-            退款总件数=(qty_col, "sum")
-        ).reset_index()
-        shop_summary = shop_summary.sort_values(by="退款工单总数", ascending=False).reset_index(drop=True)
-        st.dataframe(shop_summary, width="stretch")
-    else:
-        st.info("暂无店铺数据")
+    shop_summary = df_data.groupby("店铺").agg(
+        退款工单总数=("订单号", "count"),
+        退款总金额RMB=("退款金额RMB", "sum"),
+        退款总件数=("退款数量(仅支持2021年12月22日之后创建的退款单)", "sum")
+    ).reset_index().sort_values(by="退款工单总数", ascending=False).reset_index(drop=True)
+    st.dataframe(shop_summary, width="stretch")
 
-    # ========== 图表1：退货商品占比饼图 ==========
+    # 饼图
     st.divider()
     st.subheader("各商品退货件数占比分布")
-    if not df_data.empty:
-        sku_summary = df_data.groupby(["店铺", "sku中文名"]).agg(
-            退货工单数量=("订单号", "count"),
-            退货总件数=(qty_col, "sum"),
-            退款总金额RMB=("退款金额RMB", "sum")
-        ).reset_index()
-        sku_summary = sku_summary.sort_values(by="退货总件数", ascending=False).reset_index(drop=True)
-        top15_pie = sku_summary.head(15)
-        fig_pie = px.pie(
-            top15_pie,
-            values="退货总件数",
-            names="sku中文名",
-            title="筛选区间TOP15商品退货件数占比",
-            hole=0.1
-        )
-        st.plotly_chart(fig_pie, width="stretch")
-    else:
-        st.info("无商品退货数据")
+    sku_summary = df_data.groupby(["店铺", "sku中文名"]).agg(
+        退货工单数量=("订单号", "count"),
+        退货总件数=("退款数量(仅支持2021年12月22日之后创建的退款单)", "sum"),
+        退款总金额RMB=("退款金额RMB", "sum")
+    ).reset_index().sort_values(by="退货总件数", ascending=False).reset_index(drop=True)
+    top15_pie = sku_summary.head(15)
+    fig_pie = px.pie(top15_pie, values="退货总件数", names="sku中文名", title="筛选区间TOP15商品退货件数占比", hole=0.1)
+    st.plotly_chart(fig_pie, width="stretch")
 
-    # ========== 商品SKU中文名退货排行模块 ==========
+    # SKU排行
     st.divider()
     st.subheader("各商品SKU退货排行（按退货件数倒序）")
-    if not df_data.empty:
-        sku_summary_full = df_data.groupby(["店铺", "sku中文名", "SKU"]).agg(
-            退货工单数量=("订单号", "count"),
-            退货总件数=(qty_col, "sum"),
-            退款总金额RMB=("退款金额RMB", "sum")
-        ).reset_index()
-        sku_summary_full = sku_summary_full.sort_values(by="退货总件数", ascending=False).reset_index(drop=True)
-        st.dataframe(sku_summary_full, width="stretch", height=400)
-        # 修复：空表保护，防止iloc[0]崩溃进程
-        if len(sku_summary_full) > 0:
-            top1_sku = sku_summary_full.iloc[0]
-            st.success(
-                f"🔥 当前筛选区间退货量最高商品：【{top1_sku['sku中文名']}】，所属店铺：{top1_sku['店铺']}，累计退货件数：{int(top1_sku['退货总件数'])}")
-    else:
-        st.info("暂无商品排行数据")
+    sku_summary_full = df_data.groupby(["店铺", "sku中文名", "SKU"]).agg(
+        退货工单数量=("订单号", "count"),
+        退货总件数=("退款数量(仅支持2021年12月22日之后创建的退款单)", "sum"),
+        退款总金额RMB=("退款金额RMB", "sum")
+    ).reset_index().sort_values(by="退货总件数", ascending=False).reset_index(drop=True)
+    st.dataframe(sku_summary_full, width="stretch", height=400)
+    top1_sku = sku_summary_full.iloc[0]
+    st.success(f"🔥 当前筛选区间退货量最高商品：【{top1_sku['sku中文名']}】，所属店铺：{top1_sku['店铺']}，累计退货件数：{int(top1_sku['退货总件数'])}")
 
-    # ====================== 单品维度分店铺明细查询 ======================
+    # 单品查询
     st.divider()
     st.subheader("单品维度分店铺明细查询")
-    if not sku_summary.empty:
-        # 1、构造下拉选项：商品名称(总工单)，按商品总工单降序
-        sku_opt_df = sku_summary.groupby("sku中文名")["退货工单数量"].sum().reset_index()
-        sku_opt_df = sku_opt_df.sort_values("退货工单数量", ascending=False).reset_index(drop=True)
-        sku_opt_df["展示名称"] = sku_opt_df["sku中文名"] + " (" + sku_opt_df["退货工单数量"].astype(str) + ")"
-        opt_list = sku_opt_df["展示名称"].tolist()
-        select_sku_show = st.selectbox("选择商品品类", options=opt_list)
-        select_sku_name = select_sku_show.split(" (")[0]
+    sku_opt_df = sku_summary.groupby("sku中文名")["退货工单数量"].sum().reset_index().sort_values("退货工单数量", ascending=False).reset_index(drop=True)
+    sku_opt_df["展示名称"] = sku_opt_df["sku中文名"] + " (" + sku_opt_df["退货工单数量"].astype(str) + ")"
+    opt_list = sku_opt_df["展示名称"].tolist()
+    select_sku_show = st.selectbox("选择商品品类", options=opt_list)
+    select_sku_name = select_sku_show.split(" (")[0]
 
-        # 2、筛选当前商品所有店铺聚合数据
-        filter_sku_shop = sku_summary[sku_summary["sku中文名"] == select_sku_name].copy()
-        total_sku_all_order = filter_sku_shop["退货工单数量"].sum()
+    filter_sku_shop = sku_summary[sku_summary["sku中文名"] == select_sku_name].copy()
+    total_sku_all_order = filter_sku_shop["退货工单数量"].sum()
+    sku_shop_table = filter_sku_shop.rename(columns={
+        "退货工单数量": "该店铺工单数量",
+        "退款总金额RMB": "退款总金额RMB",
+        "退货总件数": "退货总件数"
+    })
+    sku_shop_table["该店铺工单占此商品总工单比例"] = (sku_shop_table["该店铺工单数量"] / total_sku_all_order * 100).round(2).astype(str) + "%"
+    sku_shop_table = sku_shop_table.sort_values(by="该店铺工单数量", ascending=False).reset_index(drop=True)
+    show_cols = ["店铺", "该店铺工单数量", "退款总金额RMB", "退货总件数", "该店铺工单占此商品总工单比例"]
+    st.dataframe(sku_shop_table[show_cols], width="stretch")
 
-        # 3、重命名字段
-        sku_shop_table = filter_sku_shop.rename(columns={
-            "退货工单数量": "该店铺工单数量",
-            "退款总金额RMB": "退款总金额RMB",
-            "退货总件数": "退货总件数"
-        })
-        # 计算占比
-        sku_shop_table["该店铺工单占此商品总工单比例"] = (sku_shop_table["该店铺工单数量"] / total_sku_all_order * 100).round(2).astype(str) + "%"
-        # 排序
-        sku_shop_table = sku_shop_table.sort_values(by="该店铺工单数量", ascending=False).reset_index(drop=True)
-        # 固定展示列
-        show_cols = ["店铺", "该店铺工单数量", "退款总金额RMB", "退货总件数", "该店铺工单占此商品总工单比例"]
-        st.dataframe(sku_shop_table[show_cols], width="stretch")
-    else:
-        st.info("无商品数据，无法选择单品查看明细")
-
+    # 退款明细（原版保留，width替换）
     st.divider()
-    # 原始明细表格（空数据友好提示）
     st.subheader("退款订单明细")
-    if df_data.empty:
-        st.info("当前筛选条件下无匹配退款订单数据，请更换部门/日期/退款状态后重试")
-    else:
-        st.dataframe(df_data, width="stretch", height=400)
+    st.dataframe(df_data, width="stretch", height=400)
 
-    # ====================== 【核心修复】云平台兼容Excel导出（纯内存，不写本地文件） ======================
+    # 【核心修复】内存导出，不再写本地文件，多选多部门不会卡死进程
     def export_excel():
         buf = BytesIO()
         with pd.ExcelWriter(buf, engine="openpyxl") as output:
-            if not df_data.empty:
-                df_data.to_excel(output, sheet_name="明细数据", index=False)
-            if not shop_summary.empty:
-                shop_summary.to_excel(output, sheet_name="店铺汇总", index=False)
-            if not sku_summary_full.empty:
-                sku_summary_full.to_excel(output, sheet_name="商品退货排行", index=False)
+            df_data.to_excel(output, sheet_name="明细数据", index=False)
+            shop_summary.to_excel(output, sheet_name="店铺汇总", index=False)
+            sku_summary_full.to_excel(output, sheet_name="商品退货排行", index=False)
         buf.seek(0)
         return buf.getvalue()
 
@@ -319,7 +249,7 @@ def dashboard_main():
     )
 
 
-# ---------------------- 页面路由控制 ----------------------
+# 页面路由控制
 if "user" not in st.session_state:
     login_page()
 else:
