@@ -201,7 +201,7 @@ def dashboard_main():
         退款总金额RMB=("退款金额RMB", "sum")
     ).reset_index().sort_values(by="退货总件数", ascending=False).reset_index(drop=True)
     st.dataframe(sku_summary_full, width="stretch", height=400)
-    top1_sku = sku_summary_full.iloc[0]
+    top1_sku = sku_summary.iloc[0]
     st.success(f"🔥 当前筛选区间退货量最高商品：【{top1_sku['sku中文名']}】，所属店铺：{top1_sku['店铺']}，累计退货件数：{int(top1_sku['退货总件数'])}")
 
     # 单品查询
@@ -226,27 +226,27 @@ def dashboard_main():
     st.dataframe(sku_shop_table[show_cols], width="stretch")
 
 
-    
-    
     st.divider()
-    # 原始明细表格（保持你最初版本，不分页，原样）
-    st.subheader("退款订单明细")
-    st.dataframe(df_data, use_container_width=True, height=400)
-    # 导出Excel功能
+    # ========= 删除原始退款明细表格，不展示大数据表 =========
+
+    # 导出Excel：内存方案，不生成本地文件，仅3张汇总表
     def export_excel():
-        output = pd.ExcelWriter("退款数据导出.xlsx", engine="openpyxl")
-        shop_summary.to_excel(output, sheet_name="店铺汇总", index=False)
-        sku_summary_full.to_excel(output, sheet_name="商品退货排行", index=False)
-        sku_shop_table.to_excel(output, sheet_name="单品店铺明细", index=False)
-        output.close()
-        with open("退款数据导出.xlsx", "rb") as f:
-            return f.read()
+        buf = BytesIO()
+        with pd.ExcelWriter(buf, engine="openpyxl") as output:
+            if not shop_summary.empty:
+                shop_summary.to_excel(output, sheet_name="店铺汇总", index=False)
+            if not sku_summary_full.empty:
+                sku_summary_full.to_excel(output, sheet_name="商品退货排行", index=False)
+            if not sku_shop_table.empty:
+                sku_shop_table.to_excel(output, sheet_name="单品店铺明细", index=False)
+        buf.seek(0)
+        return buf.getvalue()
 
     excel_bytes = export_excel()
     st.download_button(
-        label="导出全部筛选数据Excel",
+        label="导出汇总数据Excel",
         data=excel_bytes,
-        file_name="Ozon退款数据导出.xlsx",
+        file_name="Ozon退款汇总数据.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
 
