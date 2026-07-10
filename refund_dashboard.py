@@ -235,9 +235,9 @@ def dashboard_main():
     # 导出Excel功能
     def export_excel():
         output = pd.ExcelWriter("退款数据导出.xlsx", engine="openpyxl")
-        df_data.to_excel(output, sheet_name="明细数据", index=False)
         shop_summary.to_excel(output, sheet_name="店铺汇总", index=False)
         sku_summary_full.to_excel(output, sheet_name="商品退货排行", index=False)
+        sku_shop_table.to_excel(output, sheet_name="单品店铺明细", index=False)
         output.close()
         with open("退款数据导出.xlsx", "rb") as f:
             return f.read()
