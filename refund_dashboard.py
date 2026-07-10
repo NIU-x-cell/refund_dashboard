@@ -104,31 +104,29 @@ def dashboard_main():
             max_value=max_db_date.date()
         )
 
-    # ========= 修复：JOIN两张表匹配部门，解决店铺名称不一致查不到数据 =========
+    # 参数化查询，替换原版f-string拼接，防止店铺名称带单引号崩溃
+    shop_all = get_shop_by_dept(select_dept)
+    shop_holders = ",".join(["%s"] * len(shop_all))
     status_holders = ",".join(["%s"] * len(select_status))
     filter_sql = f"""
-    SELECT DISTINCT t.* FROM ozon_ref t
-    INNER JOIN shop_de s ON TRIM(t.店铺) = TRIM(s.店铺)
-    WHERE s.dept_code IN ({','.join(['%s']*len(select_dept))})
-      AND t.`创建退款时订单状态` IN ({status_holders})
-      AND DATE(t.`退款时间`) BETWEEN %s AND %s
+    SELECT * FROM ozon_ref
+    WHERE `店铺` IN ({shop_holders})
+      AND `创建退款时订单状态` IN ({status_holders})
+      AND DATE(`退款时间`) BETWEEN %s AND %s
     """
-    params_main = select_dept + select_status + [start_date, end_date]
-    df_data = query_sql(filter_sql, params=params_main)
+    df_data = query_sql(filter_sql, params=shop_all + select_status + [start_date, end_date])
 
-    # 上期同期查询同步改成JOIN写法
+    # 上期同期查询同样参数化
     days_range = (end_date - start_date).days
     last_start = start_date - timedelta(days=days_range + 1)
     last_end = start_date - timedelta(days=1)
     last_sql = f"""
-    SELECT DISTINCT t.* FROM ozon_ref t
-    INNER JOIN shop_dept s ON TRIM(t.店铺) = TRIM(s.店铺)
-    WHERE s.dept_code IN ({','.join(['%s']*len(select_dept))})
-      AND t.`创建退款时订单状态` IN ({status_holders})
-      AND DATE(t.`退款时间`) BETWEEN %s AND %s
+    SELECT * FROM ozon_ref
+    WHERE `店铺` IN ({shop_holders})
+      AND `创建退款时订单状态` IN ({status_holders})
+      AND DATE(`退款时间`) BETWEEN %s AND %s
     """
-    params_last = select_dept + select_status + [last_start, last_end]
-    df_last = query_sql(last_sql, params=params_last)
+    df_last = query_sql(last_sql, params=shop_all + select_status + [last_start, last_end])
 
     # 指标计算原版不动
     curr_order = len(df_data)
@@ -162,23 +160,15 @@ def dashboard_main():
         shop_count = df_data["店铺"].nunique()
         st.metric("涉及店铺数量", value=shop_count)
 
-    # ========= 修复趋势图：增加日期转换兜底，防止dt报错页面崩溃 =========
+    # 每日趋势图，use_container_width → width="stretch"
     st.divider()
     trend_title = "全部门每日退货件数趋势" if is_admin else f"{self_dept} 部门每日退货件数趋势"
     st.subheader(trend_title)
-    if not df_data.empty:
-        df_data["tmp_refund_dt"] = pd.to_datetime(df_data["退款时间"], errors="coerce")
-        valid_df = df_data[df_data["tmp_refund_dt"].notna()]
-        if not valid_df.empty:
-            day_trend = valid_df.groupby(valid_df["tmp_refund_dt"].dt.date)[
-                "退款数量(仅支持2021年12月22日之后创建的退款单)"].sum().reset_index()
-            day_trend.columns = ["日期", "当日退货件数"]
-            fig_line = px.line(day_trend, x="日期", y="当日退货件数", markers=True, title="每日退货件数走势", labels={"当日退货件数": "退货总件数"})
-            st.plotly_chart(fig_line, width="stretch")
-        else:
-            st.info("当前筛选无有效日期数据，无法生成趋势图")
-    else:
-        st.info("暂无匹配退款数据")
+    day_trend = df_data.groupby(df_data["退款时间"].dt.date)[
+        "退款数量(仅支持2021年12月22日之后创建的退款单)"].sum().reset_index()
+    day_trend.columns = ["日期", "当日退货件数"]
+    fig_line = px.line(day_trend, x="日期", y="当日退货件数", markers=True, title="每日退货件数走势", labels={"当日退货件数": "退货总件数"})
+    st.plotly_chart(fig_line, width="stretch")
 
     st.divider()
     # 店铺汇总表格
@@ -186,7 +176,7 @@ def dashboard_main():
     shop_summary = df_data.groupby("店铺").agg(
         退款工单总数=("订单号", "count"),
         退款总金额RMB=("退款金额RMB", "sum"),
-        退款总件数=("退款数量(仅支持2021年12月22日之后创建的退款单)","sum")
+        退款总件数=("退款数量(仅支持2021年12月22日之后创建的退款单)", "sum")
     ).reset_index().sort_values(by="退款工单总数", ascending=False).reset_index(drop=True)
     st.dataframe(shop_summary, width="stretch")
 
