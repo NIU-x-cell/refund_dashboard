@@ -216,13 +216,20 @@ def dashboard_main():
     st.success(f"🔥 当前筛选区间退货量最高商品：【{top1_sku['sku中文名']}】，所属店铺：{top1_sku['店铺']}，累计退货件数：{int(top1_sku['退货总件数'])}")
 
     # 单品查询
+    # 单品查询
     st.divider()
     st.subheader("单品维度分店铺明细查询")
-    sku_opt_df = sku_summary.groupby("sku中文名")["退货工单数量"].sum().reset_index().sort_values("退货工单数量", ascending=False).reset_index(drop=True)
+    sku_opt_df = sku_summary.groupby("sku中文名")["退货工单数量"].sum().reset_index().sort_values("退货工单数量",
+                                                                                                  ascending=False).reset_index(
+        drop=True)
     sku_opt_df["展示名称"] = sku_opt_df["sku中文名"] + " (" + sku_opt_df["退货工单数量"].astype(str) + ")"
     opt_list = sku_opt_df["展示名称"].tolist()
+
+    # 构建【展示文本 → 原始sku中文名】映射，绕过split字符串匹配漏洞
+    map_dict = dict(zip(sku_opt_df["展示名称"], sku_opt_df["sku中文名"]))
+
     select_sku_show = st.selectbox("选择商品品类", options=opt_list)
-    select_sku_name = select_sku_show.split(" (")[0]
+    select_sku_name = map_dict[select_sku_show]
 
     filter_sku_shop = sku_summary[sku_summary["sku中文名"] == select_sku_name].copy()
     total_sku_all_order = filter_sku_shop["退货工单数量"].sum()
@@ -231,11 +238,12 @@ def dashboard_main():
         "退款总金额RMB": "退款总金额RMB",
         "退货总件数": "退货总件数"
     })
-    sku_shop_table["该店铺工单占此商品总工单比例"] = (sku_shop_table["该店铺工单数量"] / total_sku_all_order * 100).round(2).astype(str) + "%"
+    sku_shop_table["该店铺工单占此商品总工单比例"] = (sku_shop_table[
+                                                          "该店铺工单数量"] / total_sku_all_order * 100).round(
+        2).astype(str) + "%"
     sku_shop_table = sku_shop_table.sort_values(by="该店铺工单数量", ascending=False).reset_index(drop=True)
     show_cols = ["店铺", "该店铺工单数量", "退款总金额RMB", "退货总件数", "该店铺工单占此商品总工单比例"]
     st.dataframe(sku_shop_table[show_cols], width="stretch")
-
 
     st.divider()
     # ========= 删除原始退款明细表格，不展示大数据表 =========
